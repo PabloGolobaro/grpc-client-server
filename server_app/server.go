@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -25,7 +26,7 @@ var collection *mongo.Collection
 type server struct {
 	pokemonpc.PokemonServiceServer
 }
-type pokemonItem struct {
+type PokemonItem struct {
 	ID          primitive.ObjectID `bson:"id"`
 	Pid         string             `bson:"pid"`
 	Name        string             `bson:"name"`
@@ -33,7 +34,7 @@ type pokemonItem struct {
 	Description string             `bson:"description"`
 }
 
-func getPokemonData(data *pokemonItem) *pokemonpc.Pokemon {
+func getPokemonData(data *PokemonItem) *pokemonpc.Pokemon {
 	return &pokemonpc.Pokemon{
 		Id:          data.ID.Hex(),
 		Pid:         data.Pid,
@@ -43,11 +44,19 @@ func getPokemonData(data *pokemonItem) *pokemonpc.Pokemon {
 	}
 
 }
+func InsertPokemonIntoItem(pokemon *pokemonpc.Pokemon) PokemonItem {
+	return PokemonItem{
+		Pid:         pokemon.GetPid(),
+		Name:        pokemon.GetName(),
+		Power:       pokemon.GetPower(),
+		Description: pokemon.GetDescription(),
+	}
+}
 
 func (s *server) CreatePokemon(ctx context.Context, request *pokemonpc.CreatePokemonRequest) (*pokemonpc.CreatePokemonResponse, error) {
 	log.Println("Create Pokemon...")
 	pokemon := request.GetPokemon()
-	data := pokemonItem{
+	data := PokemonItem{
 		Pid:         pokemon.GetPid(),
 		Name:        pokemon.GetName(),
 		Power:       pokemon.GetPower(),
@@ -69,6 +78,50 @@ func (s *server) CreatePokemon(ctx context.Context, request *pokemonpc.CreatePok
 			Power:       pokemon.GetPower(),
 			Description: pokemon.GetDescription(),
 		},
+	}, nil
+}
+func (s *server) ReadPokemon(ctx context.Context, request *pokemonpc.ReadPokemonRequest) (*pokemonpc.ReadPokemonResponse, error) {
+	log.Println("Read Pokemon...")
+	pid := request.GetPid()
+	data := &PokemonItem{}
+	filter := bson.D{{"pid", pid}}
+	res := collection.FindOne(ctx, filter)
+	if err := res.Decode(data); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, fmt.Sprintf("Cannot parse PID"))
+	}
+	return &pokemonpc.ReadPokemonResponse{
+		Pokemon: getPokemonData(data),
+	}, nil
+}
+func (s *server) UpdatePokemon(ctx context.Context, request *pokemonpc.UpdatePokemonRequest) (*pokemonpc.UpdatePokemonResponse, error) {
+	log.Println("Update pokemon...")
+	pokemon := request.GetPokemon()
+	data := InsertPokemonIntoItem(pokemon)
+	filter := bson.D{{"pid", pokemon.GetPid()}}
+	err := collection.FindOneAndReplace(ctx, filter, data).Err()
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, status.Errorf(codes.NotFound, "Cannot find Pokemon in MongoDB: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "Cannot update object in MongoDB: %v", err)
+	}
+	return &pokemonpc.UpdatePokemonResponse{
+		Pokemon: getPokemonData(&data),
+	}, nil
+}
+func (s *server) DeletePokemon(ctx context.Context, request *pokemonpc.DeletePokemonRequest) (*pokemonpc.DeletePokemonResponse, error) {
+	log.Println("Delete Pokemon...")
+	pid := request.GetPid()
+	filter := bson.D{{"pid", pid}}
+	err := collection.FindOneAndDelete(ctx, filter).Err()
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, status.Errorf(codes.NotFound, "Cannot find Pokemon in MongoDB: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "Cannot delete object in MongoDB: %v", err)
+	}
+	return &pokemonpc.DeletePokemonResponse{
+		Pid: pid,
 	}, nil
 }
 func main() {
